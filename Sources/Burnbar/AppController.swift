@@ -45,6 +45,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
     private let notifyItem = NSMenuItem(title: "Notify Near Limits", action: #selector(toggleNotify), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
+    private let coloursItem = NSMenuItem(title: "Customise Appearance…", action: #selector(openColours), keyEquivalent: ",")
+    private var coloursWindow: NSWindow?
 
     // MARK: Lifecycle
 
@@ -57,6 +59,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.setAccessibilityLabel("Burnbar")
         }
         buildMenu()
+        installEditMenu()
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.statusView.coloursChanged()
@@ -328,6 +331,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(refreshItem)
         menu.addItem(.separator())
+        menu.addItem(coloursItem)
+        menu.addItem(.separator())
         menu.addItem(notifyItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
@@ -384,6 +389,39 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleNotify() { notifier.enabled.toggle(); updateMenu() }
+
+    @objc private func openColours() {
+        if coloursWindow == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: ColourSettingsView()))
+            window.title = "Burnbar Appearance"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            coloursWindow = window
+        }
+        NSApp.activate()
+        coloursWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// A menu-bar-only app has no Edit menu, so ⌘C / ⌘V / ⌘A would do nothing in the hex fields.
+    /// The main menu is never shown (LSUIElement); it only provides the key equivalents.
+    private func installEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let editItem = NSMenuItem()
+        editItem.submenu = edit
+        let main = NSMenu()
+        main.addItem(NSMenuItem())   // slot for the (hidden) app menu
+        main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
 
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
