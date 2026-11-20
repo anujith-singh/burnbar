@@ -8,5 +8,10 @@ let package = Package(
     targets: [
         // Pure logic: parsing, pace, forecasting, formatting. No AppKit, so it is unit-testable.
         .target(name: "BurnbarCore"),
+        .testTarget(
+            name: "BurnbarCoreTests",
+            dependencies: ["BurnbarCore"],
+            resources: [.copy("Fixtures")]
+        ),
     ]
 )
