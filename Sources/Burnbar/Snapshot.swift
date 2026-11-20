@@ -60,7 +60,7 @@ enum Snapshot {
                                      surfaces: usage.surfaces, fetchedAt: now.addingTimeInterval(-25 * 60)),
                         samples: [], lastError: "Offline", signedOutReason: nil, paused: false,
                         nextFetchAt: now.addingTimeInterval(60), onAC: false),
-            PanelInputs(usage: nil, samples: [], lastError: "x", signedOutReason: "Claude Code's sign-in token has expired.",
+            PanelInputs(usage: nil, samples: [], lastError: "x", signedOutReason: SignInMessage.notRenewed,
                         paused: false, nextFetchAt: now.addingTimeInterval(300), onAC: true),
         ]
         let hosts = inputs.map { input -> NSHostingView<MenuPanel> in

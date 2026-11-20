@@ -170,3 +170,44 @@ private func fixture(_ name: String) throws -> Data {
         #expect(Format.approxTime(iso("2026-11-19T15:08:00Z"), now: now, calendar: cal, locale: loc) == "~3:10\u{202F}PM")
     }
 }
+
+@Suite struct Renewing {
+    let now = iso("2026-11-21T01:00:00Z")
+    var past: Date { now.addingTimeInterval(-60) }
+    var future: Date { now.addingTimeInterval(3600) }
+
+    @Test func validTokenIsLeftAlone() {
+        #expect(Renewal.decide(accessExpiresAt: future, refreshExpiresAt: future, lastAttempt: nil, manual: true, now: now) == .notNeeded)
+        // No expiry recorded: nothing to judge by, so use the token and let the server decide.
+        #expect(Renewal.decide(accessExpiresAt: nil, refreshExpiresAt: nil, lastAttempt: nil, manual: false, now: now) == .notNeeded)
+    }
+
+    @Test func expiredTokenIsRenewed() {
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: future, lastAttempt: nil, manual: false, now: now) == .renew)
+        // An unknown refresh-token expiry doesn't block an attempt.
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: nil, lastAttempt: nil, manual: false, now: now) == .renew)
+        // Expiring exactly now counts as expired.
+        #expect(Renewal.decide(accessExpiresAt: now, refreshExpiresAt: nil, lastAttempt: nil, manual: false, now: now) == .renew)
+    }
+
+    @Test func expiredRefreshTokenNeedsANewSignIn() {
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: past, lastAttempt: nil, manual: true, now: now) == .signInEnded)
+    }
+
+    @Test func backgroundAttemptsAreSpacedButManualOnesAreNot() {
+        let recent = now.addingTimeInterval(-Renewal.minimumGap + 1)
+        let old = now.addingTimeInterval(-Renewal.minimumGap)
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: future, lastAttempt: recent, manual: false, now: now) == .tooSoon)
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: future, lastAttempt: old, manual: false, now: now) == .renew)
+        #expect(Renewal.decide(accessExpiresAt: past, refreshExpiresAt: future, lastAttempt: recent, manual: true, now: now) == .renew)
+    }
+
+    @Test func successMeansANewerValidToken() {
+        #expect(Renewal.renewed(previous: past, current: future, now: now))
+        #expect(Renewal.renewed(previous: nil, current: future, now: now))
+        #expect(!Renewal.renewed(previous: past, current: past, now: now))                         // unchanged
+        #expect(!Renewal.renewed(previous: future, current: future, now: now))                     // unchanged, though valid
+        #expect(!Renewal.renewed(previous: past, current: now.addingTimeInterval(-1), now: now))   // newer but still expired
+        #expect(!Renewal.renewed(previous: past, current: nil, now: now))                          // item gone
+    }
+}

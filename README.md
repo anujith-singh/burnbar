@@ -79,8 +79,10 @@ signs it ad hoc, installs it to `~/Applications` and launches it. Run it again t
 On first launch macOS may ask whether Burnbar can send notifications, and will show that it was
 added to your login items.
 
-If the dropdown says **"Can't read your Claude usage"**, Claude Code's sign-in has expired: run
-`claude` in Terminal once. Burnbar picks up the refreshed sign-in on its next check.
+When Claude Code's sign-in token expires (about every 8 h if you don't use the `claude` command),
+Burnbar runs `claude` briefly so Claude Code renews it. If the dropdown says **"Can't read your
+Claude usage"**, it tells you what to run; usually `claude auth login` once Claude Code's sign-in
+has ended (a few weeks after logging in).
 
 ### Uninstall
 
@@ -97,16 +99,20 @@ Remove it from System Settings › General › Login Items if it's still listed.
 
 - **Data:** `GET https://api.anthropic.com/api/oauth/usage` with Claude Code's OAuth token. The
   endpoint is **undocumented**, so Burnbar parses it defensively and may break if it changes.
-- **Sign-in, read-only:** the token is read from the macOS Keychain item `Claude Code-credentials`
-  via `/usr/bin/security`. Burnbar **never refreshes or writes it**: refreshing would rotate the
-  token and sign Claude Code out. When the token expires (about every 8 h if Claude Code isn't
-  running), Burnbar waits for Claude Code to refresh it.
+- **Sign-in:** the token is read from the macOS Keychain item `Claude Code-credentials` via
+  `/usr/bin/security`. Burnbar **never refreshes or writes it**: refreshing would rotate the token
+  and sign Claude Code out. When the token has expired (about every 8 h if you don't use the
+  `claude` command), Burnbar runs `claude mcp get burnbar-renewal-probe`, which makes Claude Code
+  renew its own token, then reads the Keychain again. It tries at most every 15 min in the
+  background, and whenever you choose Refresh Now.
 - **Refresh policy:** see Features. A fetch also runs once right after a reset time passes and on
   wake/unlock. Failed fetches retry at 30 s, 1, 2, 4 min; HTTP 429 backs off up to 30 min.
 
 ## Privacy
 
-- Reads one Keychain item (Claude Code's sign-in) and talks to one host, `api.anthropic.com`.
+- Reads one Keychain item (Claude Code's sign-in) and talks to one host, `api.anthropic.com`. When
+  that sign-in has expired it runs your installed `claude` command, which contacts Anthropic itself
+  to renew it.
 - Stores the last 48 h of usage readings in `~/Library/Application Support/Burnbar/samples.json` to
   estimate your burn rate, and its settings in `com.burnbar.Burnbar` preferences.
 - No analytics, no telemetry, no other network access. The token is never logged.

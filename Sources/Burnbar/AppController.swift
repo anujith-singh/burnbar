@@ -159,7 +159,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshItem.isEnabled = false
         Log.app.notice("fetch (\(reason, privacy: .public))")
         Task {
-            let outcome = await client.fetch()
+            let outcome = await client.fetch(manual: reason == "manual")
             self.inFlight = false
             self.refreshItem.title = "Refresh Now"
             self.refreshItem.isEnabled = true
@@ -183,7 +183,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             notifier.check(u)
             Log.app.notice("ok session=\(u.session.percent) week=\(u.week.percent)")
         case .signedOut(let reason):
-            // Not transient: poll at the normal interval and pick the token up once the CLI refreshes it.
+            // Not transient: poll at the normal interval. An expired token is renewed through `claude`
+            // (at most every 15 min in the background); a new sign-in is picked up on the next check.
             signedOutReason = reason
             lastError = reason
             failureCount = 0
