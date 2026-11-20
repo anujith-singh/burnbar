@@ -43,8 +43,7 @@ extension PanelModel {
         var m = PanelModel(footer: "", footerIsError: false, stale: i.stale || i.lastError != nil)
 
         if let reason = i.signedOutReason {
-            m.banner = ("Can't read your Claude usage",
-                        "\(reason) Run `claude` in Terminal to log in again — Burnbar only reads the token, it never refreshes it.")
+            m.banner = ("Can't read your Claude usage", reason)   // each reason says what to do
         }
 
         if let u = i.usage {

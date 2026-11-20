@@ -27,6 +27,8 @@ swift test -Xswiftc -plugin-path -Xswiftc /Library/Developer/CommandLineTools/us
 
 - **Never refresh or write the Claude Code OAuth token.** Read-only, via `/usr/bin/security`.
   Refreshing rotates the refresh token and signs Claude Code out.
+  An expired token is renewed only by running the `claude` command so Claude Code renews its own
+  (DECISIONS §1); success is judged by the Keychain expiry moving forward.
 - The theme comes from `NSApp.effectiveAppearance`, **not** the view's appearance (always dark in
   the menu bar on macOS 27). Active vs other screens is detected from the drawing pass
   (`NSAppearance.currentDrawing()` vibrant = active). See DECISIONS §5.

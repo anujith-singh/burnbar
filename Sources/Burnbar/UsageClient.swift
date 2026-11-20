@@ -3,15 +3,16 @@ import BurnbarCore
 
 enum FetchOutcome: Sendable {
     case success(Usage)
-    /// 401/403, missing credentials, or an expired token. The message is shown to the user.
+    /// 401/403, missing credentials, or an expired token that couldn't be renewed. The message is
+    /// shown to the user as-is, so it says what to do.
     case signedOut(String)
     case rateLimited(retryAfter: TimeInterval?)
     case failed(String)
 }
 
-/// Reads the Claude Code CLI's OAuth token and fetches usage. Strictly read-only:
-/// the token is never refreshed or written back, because a refresh rotates the refresh
-/// token and would log the CLI out.
+/// Reads the Claude Code CLI's OAuth token and fetches usage. Burnbar never refreshes or writes
+/// the token, because a refresh rotates the refresh token and would sign the CLI out. When the
+/// token has expired it asks the `claude` command to renew its own (see `ClaudeCLI`).
 struct UsageClient: Sendable {
     static let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private static let session: URLSession = {
@@ -26,8 +27,10 @@ struct UsageClient: Sendable {
     /// of the network, so colour states and failures can be exercised without waiting for real usage.
     /// A path that does not exist simulates a failed fetch.
     let fixturePath = ProcessInfo.processInfo.environment["BURNBAR_FIXTURE"]
+    private let renewals = RenewalLog()
 
-    func fetch() async -> FetchOutcome {
+    /// `manual`: the user chose Refresh Now, so a renewal may run even if one ran recently.
+    func fetch(manual: Bool) async -> FetchOutcome {
         if let fixturePath {
             guard let data = FileManager.default.contents(atPath: fixturePath) else { return .failed("Fixture not found") }
             do { return .success(try UsageParser.parse(data, fetchedAt: Date())) } catch { return .failed("\(error)") }
@@ -37,15 +40,26 @@ struct UsageClient: Sendable {
         let token: String
         switch credential {
         case .missing:
-            return .signedOut("No Claude Code login found in the Keychain.")
+            return .signedOut("No Claude Code sign-in found in the Keychain. Run `claude auth login` in Terminal.")
         case .error(let message):
             // Not transient (denied prompt, locked keychain): poll at the normal interval, never fast-retry.
-            return .signedOut(message)
-        case .ok(let t, let expiresAt):
-            if let expiresAt, expiresAt < Date() {
-                return .signedOut("Claude Code's sign-in token has expired.")
+            return .signedOut("\(message). Burnbar tries again on its next check.")
+        case .ok(let t, let expiresAt, let refreshExpiresAt):
+            let now = Date()
+            switch Renewal.decide(accessExpiresAt: expiresAt, refreshExpiresAt: refreshExpiresAt,
+                                  lastAttempt: await renewals.lastAttempt, manual: manual, now: now) {
+            case .notNeeded:
+                token = t
+            case .signInEnded:
+                return .signedOut(SignInMessage.ended)
+            case .tooSoon:
+                return .signedOut(await renewals.lastFailure ?? SignInMessage.notRenewed)
+            case .renew:
+                switch await renew(previous: expiresAt) {
+                case .success(let renewed): token = renewed
+                case .failure(let failure): return .signedOut(failure.message)
+                }
             }
-            token = t
         }
 
         var req = URLRequest(url: Self.url)
@@ -74,12 +88,43 @@ struct UsageClient: Sendable {
             do { return .success(try UsageParser.parse(data, fetchedAt: Date())) }
             catch { return .failed("\(error)") }
         case 401, 403:
-            return .signedOut("Claude rejected the saved sign-in (HTTP \(http.statusCode)).")
+            return .signedOut("Claude rejected the saved sign-in (HTTP \(http.statusCode)). Run `claude auth login` in Terminal.")
         case 429:
             return .rateLimited(retryAfter: Self.retryAfter(http.value(forHTTPHeaderField: "Retry-After")))
         default:
             return .failed("Server returned HTTP \(http.statusCode)")
         }
+    }
+
+    /// Runs `claude` so it renews its own sign-in, then re-reads the Keychain. Success is judged by
+    /// the token's expiry moving forward, never by the command's exit status or output.
+    private func renew(previous: Date?) async -> Result<String, RenewalFailure> {
+        await renewals.attempted(at: Date())
+        let run = await Task.detached { ClaudeCLI.runRenewal() }.value
+        let after = await Task.detached { Keychain.readClaudeCode() }.value
+        if case .ok(let token, let expiresAt, let refreshExpiresAt) = after,
+           Renewal.renewed(previous: previous, current: expiresAt, now: Date()) {
+            await renewals.succeeded()
+            // Expiry times aren't secret; they show whether renewals extend the refresh token too.
+            Log.app.notice("renewal ok (\(String(describing: run), privacy: .public)): access until \(Self.logDate(expiresAt), privacy: .public), refresh until \(Self.logDate(refreshExpiresAt), privacy: .public)")
+            return .success(token)
+        }
+        let message: String
+        if case .error(let keychainError) = after {
+            // Claude Code may well have renewed; Burnbar just couldn't read the result.
+            message = "\(keychainError). Burnbar tries again on its next check."
+        } else if case .notFound = run {
+            message = "Claude Code's sign-in token has expired, and Burnbar couldn't find the `claude` command to renew it. Run `claude` in Terminal once."
+        } else {
+            message = SignInMessage.notRenewed
+        }
+        await renewals.failed(message)
+        Log.app.notice("renewal didn't renew (\(String(describing: run), privacy: .public))")
+        return .failure(RenewalFailure(message: message))
+    }
+
+    private static func logDate(_ d: Date?) -> String {
+        d.map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
     }
 
     /// Retry-After as delta-seconds or an HTTP date.
@@ -93,8 +138,26 @@ struct UsageClient: Sendable {
     }
 }
 
+enum SignInMessage {
+    static let notRenewed = "Claude Code's sign-in token has expired and `claude` didn't renew it. Run `claude` in Terminal once; if it asks you to log in, run `claude auth login`."
+    static let ended = "Claude Code's sign-in has ended. Run `claude auth login` in Terminal to sign in again."
+}
+
+struct RenewalFailure: Error {
+    let message: String
+}
+
+/// When the last renewal ran and why it failed, shared across fetches.
+private actor RenewalLog {
+    private(set) var lastAttempt: Date?
+    private(set) var lastFailure: String?
+    func attempted(at date: Date) { lastAttempt = date }
+    func succeeded() { lastFailure = nil }
+    func failed(_ message: String) { lastFailure = message }
+}
+
 enum Credential: Sendable {
-    case ok(token: String, expiresAt: Date?)
+    case ok(token: String, expiresAt: Date?, refreshExpiresAt: Date?)
     case missing
     case error(String)
 }
@@ -132,8 +195,10 @@ enum Keychain {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let oauth = obj["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty else { return .missing }
-        let expiresAt = UsageParser.number(oauth["expiresAt"]).map { Date(timeIntervalSince1970: $0 / 1000) }
-        return .ok(token: token, expiresAt: expiresAt)
+        func date(_ key: String) -> Date? {
+            UsageParser.number(oauth[key]).map { Date(timeIntervalSince1970: $0 / 1000) }
+        }
+        return .ok(token: token, expiresAt: date("expiresAt"), refreshExpiresAt: date("refreshTokenExpiresAt"))
     }
 
     /// `security -w` prints the secret as-is, or as hex if it contains non-printable bytes.
