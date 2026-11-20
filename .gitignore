@@ -1,0 +1,8 @@
+.build/
+build/
+.DS_Store
+.idea/
+# Created by Xcode when it opens Package.swift (per-user schemes and state).
+.swiftpm/
+# Claude Code's per-user local settings (the repo ships a CLAUDE.md).
+.claude/settings.local.json
