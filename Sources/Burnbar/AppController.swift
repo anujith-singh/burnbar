@@ -12,6 +12,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let panelHost = NSHostingView(rootView: MenuPanel(model: PanelModel(footer: "", footerIsError: false, stale: true)))
     private let client = UsageClient()
     private let store = SampleStore(url: SampleStore.defaultURL())
+    private let notifier = Notifier()
     private let defaults = UserDefaults.standard
 
     // Data state
@@ -42,6 +43,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Static menu items
     private let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshNow), keyEquivalent: "r")
+    private let notifyItem = NSMenuItem(title: "Notify Near Limits", action: #selector(toggleNotify), keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
 
     // MARK: Lifecycle
@@ -67,6 +69,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         screenLocked = ScreenLock.isLocked()
         observeEnvironment()
         enableLoginItemOnFirstRun()
+        notifier.requestAuthorization()
+        notifier.refreshAuthorizationStatus()
 
         Log.app.notice("status item height=\(Double(self.statusItem.button?.bounds.height ?? -1), privacy: .public) thickness=\(Double(NSStatusBar.system.thickness), privacy: .public)")
         Log.app.notice("launch ac=\(self.onAC) locked=\(self.screenLocked) loginItem=\(SMAppService.mainApp.status.rawValue)")
@@ -173,6 +177,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rateLimitCount = 0
             rateLimitedUntil = nil
             store.append(u)
+            notifier.check(u)
             Log.app.notice("ok session=\(u.session.percent) week=\(u.week.percent)")
         case .signedOut(let reason):
             // Not transient: poll at the normal interval and pick the token up once the CLI refreshes it.
@@ -323,6 +328,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(refreshItem)
         menu.addItem(.separator())
+        menu.addItem(notifyItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Burnbar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -336,6 +342,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         menuOpen = true
         statusView.highlighted = true
+        notifier.refreshAuthorizationStatus()
     }
 
     func menuDidClose(_ menu: NSMenu) {
@@ -346,6 +353,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateMenu() {
         panelHost.rootView = MenuPanel(model: panelModel(now: Date()))
         panelHost.frame.size = panelHost.fittingSize
+        notifyItem.state = notifier.enabled ? .on : .off
+        // Ad-hoc-signed builds may be refused by macOS; say so instead of showing a checkmark that does nothing.
+        // The hint goes in a small second line rather than the title, which set the whole menu's width.
+        let blocked = notifier.enabled && notifier.authorized == false
+        if #available(macOS 14.4, *) {
+            notifyItem.subtitle = blocked ? "Allow in System Settings › Notifications" : nil
+        }
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         if let until = rateLimitedUntil, until > Date() {
             refreshItem.isEnabled = false
@@ -368,6 +382,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let until = rateLimitedUntil, until > Date() { return }
         fetch(reason: "manual")
     }
+
+    @objc private func toggleNotify() { notifier.enabled.toggle(); updateMenu() }
 
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
