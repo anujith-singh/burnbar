@@ -4,10 +4,13 @@ import PackageDescription
 
 let package = Package(
     name: "Burnbar",
+    // 14: NSMenuItem.sectionHeader is used in the dropdown.
     platforms: [.macOS(.v14)],
     targets: [
         // Pure logic: parsing, pace, forecasting, formatting. No AppKit, so it is unit-testable.
         .target(name: "BurnbarCore"),
+        // The menu bar app itself.
+        .executableTarget(name: "Burnbar", dependencies: ["BurnbarCore"]),
         .testTarget(
             name: "BurnbarCoreTests",
             dependencies: ["BurnbarCore"],
